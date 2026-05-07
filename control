@@ -1,0 +1,9 @@
+Package: com.xiaopan.HelloTimeCalc
+Name: HelloTimeCalc
+Version: 0.0.1
+Architecture: iphoneos-arm
+Description: An awesome MobileSubstrate tweak!
+Maintainer: root
+Author: root
+Section: Tweaks
+Depends: mobilesubstrate (>= 0.9.5000)
