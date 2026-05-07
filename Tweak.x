@@ -46,7 +46,7 @@ static void speakText(NSString *text) {
                 
                 nailuPlayer = [[AVAudioPlayer alloc] initWithData:data error:&playerError];
                 if (!playerError) {
-                    // 确保在 15 Pro Max 上不论是否静音都能响
+                    // 确保不论是否静音都能响
                     [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback error:nil];
                     [[AVAudioSession sharedInstance] setActive:YES error:nil];
                     
@@ -118,9 +118,10 @@ static void ensureOverlayUI() {
 }
 
 /**
- * 🚀 获取耗时并展示（调用奶绿）
+ * 🚀 获取耗时并展示（调用奶绿，加入时薪计算）
+ * 注意这里新增了 price 参数
  */
-static void fetchTimeAndShow(NSString *origin, NSString *destination) {
+static void fetchTimeAndShow(NSString *origin, NSString *destination, CGFloat price) {
     NSString *urlStr = [NSString stringWithFormat:@"https://restapi.amap.com/v3/direction/driving?origin=%@&destination=%@&key=%@&extensions=base", origin, destination, kAmapAPIKey];
     
     [[[NSURLSession sharedSession] dataTaskWithURL:[NSURL URLWithString:urlStr] completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
@@ -134,21 +135,29 @@ static void fetchTimeAndShow(NSString *origin, NSString *destination) {
                     int h = totalMins / 60;
                     int m = totalMins % 60;
                     
+                    // 💰 时薪计算 (扣除 10% 平台手续费)
+                    int hourlyRate = 0;
+                    if (duration > 0) {
+                        hourlyRate = (int)((price * 0.9) / (duration / 3600.0));
+                    }
+                    
                     NSString *displayTime;
                     NSString *speechTime;
                     
                     if (h > 0) {
-                        displayTime = [NSString stringWithFormat:@"%d小时%d分钟", h, m];
-                        speechTime = [NSString stringWithFormat:@"老板老板~ 这单预计全程用时%d小时%d分钟", h, m];
+                        displayTime = [NSString stringWithFormat:@"%d小时%d分 | 时薪: ¥%d", h, m, hourlyRate];
+                        speechTime = [NSString stringWithFormat:@"老板老板~ 这单要跑%d小时%d分钟，时薪有%d块钱！", h, m, hourlyRate];
                     } else {
-                        displayTime = [NSString stringWithFormat:@"%d分钟", m];
-                        speechTime = [NSString stringWithFormat:@"老板~ 这单预计全程用时%d分钟", m];
+                        displayTime = [NSString stringWithFormat:@"%d分钟 | 时薪: ¥%d", m, hourlyRate];
+                        speechTime = [NSString stringWithFormat:@"老板~ 这单要跑%d分钟，时薪有%d块钱！", m, hourlyRate];
                     }
                     
                     dispatch_async(dispatch_get_main_queue(), ^{
                         ensureOverlayUI();
-                        overlayLabel.text = [NSString stringWithFormat:@"预计全程用时 %@", displayTime];
-                        speakText(speechTime); // 这里会通过 Fish Audio 发声
+                        // 如果时薪大于 80，UI 文字变成代表高价值的绿色，否则是白色
+                        overlayLabel.textColor = hourlyRate >= 80 ? [UIColor colorWithRed:0.2 green:0.8 blue:0.2 alpha:1.0] : [UIColor whiteColor];
+                        overlayLabel.text = [NSString stringWithFormat:@"🚗 %@", displayTime];
+                        speakText(speechTime); // 这里会通过 Fish Audio 发出带有金额的语音
                         
                         [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0.5 options:UIViewAnimationOptionCurveEaseInOut animations:^{
                             overlayContainer.alpha = 1.0;
@@ -156,7 +165,7 @@ static void fetchTimeAndShow(NSString *origin, NSString *destination) {
                         } completion:nil];
                         
                         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                            [UIView animateWithDuration:1.0 animations:^{ overlayContainer.alpha = 0.2; }];
+                            [UIView animateWithDuration:1.0 animations:^{ overlayContainer.alpha = 0.0; }];
                         });
                     });
                 }
@@ -175,10 +184,22 @@ static void fetchTimeAndShow(NSString *origin, NSString *destination) {
             if (dataField && [dataField isKindOfClass:[NSDictionary class]]) {
                 NSDictionary *start = dataField[@"startPosition"];
                 NSDictionary *end = dataField[@"endPosition"];
+                
+                // 假设 JSON 里价格字段叫做 price (你需要根据哈啰实际 JSON 里的名字调整，比如 orderPrice 或 amount)
+                // 这里按照之前的 Node.js 逻辑，假设是以“分”为单位返回的，所以除以 100
+                CGFloat price = 0;
+                if (dataField[@"price"]) {
+                    price = [dataField[@"price"] doubleValue] / 100.0; 
+                } else if (dataField[@"amount"]) {
+                    price = [dataField[@"amount"] doubleValue]; // 如果是以元为单位直接取值
+                }
+                
                 if (start && end) {
                     NSString *origin = [NSString stringWithFormat:@"%@,%@", start[@"lon"], start[@"lat"]];
                     NSString *destination = [NSString stringWithFormat:@"%@,%@", end[@"lon"], end[@"lat"]];
-                    fetchTimeAndShow(origin, destination);
+                    
+                    // 传入 price
+                    fetchTimeAndShow(origin, destination, price);
                 }
             }
         } @catch (NSException *e) {}
