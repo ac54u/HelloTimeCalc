@@ -197,7 +197,7 @@ static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord, 
 }
 
 // =================================================================================
-// 🚀 纯手机端发包诱捕器：拦截并自动复制到剪贴板！
+// 🚀 纯手机端发包诱捕器 v2.0：追加模式，防止并发包互相覆盖！
 // =================================================================================
 + (NSData *)dataWithJSONObject:(id)obj options:(NSJSONWritingOptions)opt error:(NSError **)error {
     // 调用原方法，保证 APP 正常运行
@@ -214,19 +214,27 @@ static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord, 
                 if ([actionName containsString:@"pickOrder"] || 
                     [actionName containsString:@"publish"] || 
                     [actionName containsString:@"route"] ||
-                    [actionName containsString:@"trip"]) {
+                    [actionName containsString:@"trip"] ||
+                    [actionName containsString:@"add"]) {
                     
                     // 把字典转成文本
                     NSString *dictString = dict.description; 
                     
                     dispatch_async(dispatch_get_main_queue(), ^{
-                        // 1. 瞬间塞进手机剪贴板
-                        [UIPasteboard generalPasteboard].string = dictString;
+                        // 1. 读取当前剪贴板里的旧内容
+                        NSString *oldString = [UIPasteboard generalPasteboard].string;
+                        if (!oldString) oldString = @"";
                         
-                        // 2. 借用咱们现成的 UI 容器在屏幕上给你发个信号
+                        // 2. 把新抓到的包拼接到最下面，用华丽的分割线隔开
+                        NSString *newString = [NSString stringWithFormat:@"%@\n\n========== 🎯 新抓到的包: %@ ==========\n%@", oldString, actionName, dictString];
+                        
+                        // 3. 塞回剪贴板
+                        [UIPasteboard generalPasteboard].string = newString;
+                        
+                        // 4. UI 弹窗提示
                         ensureOverlayUI();
                         overlayLabel.textColor = [UIColor greenColor];
-                        overlayLabel.text = [NSString stringWithFormat:@"🎯 抓到包了！\n[%@] \n已复制，快去备忘录粘贴！", actionName];
+                        overlayLabel.text = [NSString stringWithFormat:@"🎯 连击！抓到包了！\n[%@] \n已追加到剪贴板！", actionName];
                         overlayContainer.alpha = 1.0;
                         
                         // 显示 5 秒后消失
@@ -241,5 +249,6 @@ static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord, 
     
     return result;
 }
+
 
 %end
