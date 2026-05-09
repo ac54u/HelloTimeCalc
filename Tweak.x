@@ -195,4 +195,51 @@ static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord, 
     }
     return result;
 }
+
+// =================================================================================
+// 🚀 纯手机端发包诱捕器：拦截并自动复制到剪贴板！
+// =================================================================================
++ (NSData *)dataWithJSONObject:(id)obj options:(NSJSONWritingOptions)opt error:(NSError **)error {
+    // 调用原方法，保证 APP 正常运行
+    NSData *result = %orig;
+    
+    if (obj && [obj isKindOfClass:[NSDictionary class]]) {
+        NSDictionary *dict = (NSDictionary *)obj;
+        
+        @try {
+            if (dict[@"action"]) {
+                NSString *actionName = dict[@"action"];
+                
+                // 🎯 只要包名包含这些关键词，立刻触发！
+                if ([actionName containsString:@"pickOrder"] || 
+                    [actionName containsString:@"publish"] || 
+                    [actionName containsString:@"route"] ||
+                    [actionName containsString:@"trip"]) {
+                    
+                    // 把字典转成文本
+                    NSString *dictString = dict.description; 
+                    
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        // 1. 瞬间塞进手机剪贴板
+                        [UIPasteboard generalPasteboard].string = dictString;
+                        
+                        // 2. 借用咱们现成的 UI 容器在屏幕上给你发个信号
+                        ensureOverlayUI();
+                        overlayLabel.textColor = [UIColor greenColor];
+                        overlayLabel.text = [NSString stringWithFormat:@"🎯 抓到包了！\n[%@] \n已复制，快去备忘录粘贴！", actionName];
+                        overlayContainer.alpha = 1.0;
+                        
+                        // 显示 5 秒后消失
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                            [UIView animateWithDuration:1.0 animations:^{ overlayContainer.alpha = 0.0; }];
+                        });
+                    });
+                }
+            }
+        } @catch (NSException *e) {}
+    }
+    
+    return result;
+}
+
 %end
