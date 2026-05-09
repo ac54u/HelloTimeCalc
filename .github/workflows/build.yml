@@ -22,19 +22,21 @@ jobs:
           path: theos
           submodules: recursive
 
-      - name: 🍎 3. 部署 iOS SDKs (完美避开下载解压报错)
+      - name: 🍎 3. 部署 iOS SDKs
         uses: actions/checkout@v4
         with:
           repository: theos/sdks
           path: theos/sdks
 
-      - name: 🚀 4. 编译 DEB 插件包
+      - name: ⚙️ 4. 安装签名依赖 (ldid)
+        run: brew install ldid
+
+      - name: 🚀 5. 编译 DEB 插件包
         run: |
-          # 告诉 Make 指令 Theos 环境的绝对路径
           export THEOS=$GITHUB_WORKSPACE/theos
           make package FINALPACKAGE=1
 
-      - name: 📥 5. 上传编译产物
+      - name: 📥 6. 上传编译产物
         uses: actions/upload-artifact@v4
         with:
           name: Tweak-Release-DEB
