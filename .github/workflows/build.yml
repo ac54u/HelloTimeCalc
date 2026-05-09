@@ -3,34 +3,38 @@ name: Build Theos Tweak
 on:
   push:
     branches: [ main, master ]
-  workflow_dispatch: # 允许你在网页上手动点击运行
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-latest # 直接调用 GitHub 免费的苹果 Mac 服务器
+    runs-on: macos-latest
     
     steps:
-      - name: 📦 检出代码
+      - name: 📦 1. 检出你的插件代码
         uses: actions/checkout@v4
         with:
           submodules: true
 
-      - name: 🛠️ 部署 Theos 编译环境
-        run: |
-          # 拉取 Theos 核心
-          git clone --recursive https://github.com/theos/theos.git $HOME/theos
-          
-          # 拉取 iOS SDK (这里默认使用 14.5 SDK，兼容性最好)
-          curl -L -o $HOME/theos/sdks/iPhoneOS14.5.sdk.tbz2 https://github.com/theos/sdks/releases/download/1.0/iPhoneOS14.5.sdk.tbz2
-          tar -jxf $HOME/theos/sdks/iPhoneOS14.5.sdk.tbz2 -C $HOME/theos/sdks/
-          rm $HOME/theos/sdks/iPhoneOS14.5.sdk.tbz2
+      - name: 🛠️ 2. 部署 Theos 核心环境
+        uses: actions/checkout@v4
+        with:
+          repository: theos/theos
+          path: theos
+          submodules: recursive
 
-      - name: 🚀 编译 DEB 插件包
-        run: |
-          # 注入环境变量并执行打包指令
-          make package FINALPACKAGE=1 THEOS=$HOME/theos
+      - name: 🍎 3. 部署 iOS SDKs (完美避开下载解压报错)
+        uses: actions/checkout@v4
+        with:
+          repository: theos/sdks
+          path: theos/sdks
 
-      - name: 📥 上传编译产物
+      - name: 🚀 4. 编译 DEB 插件包
+        run: |
+          # 告诉 Make 指令 Theos 环境的绝对路径
+          export THEOS=$GITHUB_WORKSPACE/theos
+          make package FINALPACKAGE=1
+
+      - name: 📥 5. 上传编译产物
         uses: actions/upload-artifact@v4
         with:
           name: Tweak-Release-DEB
