@@ -19,6 +19,22 @@ static NSDictionary *targetStartPoint = nil;
 static NSDictionary *targetEndPoint = nil;
 
 /**
+ * 🛠 时间格式化辅助函数 (把分钟转为 X小时Y分)
+ */
+static NSString* formatTimeStr(int totalMins, BOOL forSpeech) {
+    if (totalMins < 60) {
+        return [NSString stringWithFormat:forSpeech ? @"%d分钟" : @"%d分", totalMins];
+    }
+    int h = totalMins / 60;
+    int m = totalMins % 60;
+    if (m == 0) {
+        return [NSString stringWithFormat:@"%d小时", h];
+    } else {
+        return [NSString stringWithFormat:forSpeech ? @"%d小时%d分钟" : @"%d小时%d分", h, m];
+    }
+}
+
+/**
  * 🛠 语音播报逻辑
  */
 static void speakText(NSString *text) {
@@ -128,7 +144,8 @@ static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord) 
             if (path) {
                 float distKm = [path[@"distance"] floatValue] / 1000.0;
                 int mins = [path[@"duration"] intValue] / 60;
-                pickupInfo = [NSString stringWithFormat:@"🚗 接人: %.1fkm / %d分", distKm, mins];
+                NSString *timeStr = formatTimeStr(mins, NO);
+                pickupInfo = [NSString stringWithFormat:@"🚗 接人: %.1fkm / %@", distKm, timeStr];
             }
         }
         dispatch_group_leave(group);
@@ -145,8 +162,11 @@ static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord) 
                 int mins = [path[@"duration"] intValue] / 60;
                 estimatedTolls = [path[@"tolls"] floatValue];
                 
-                orderInfo = [NSString stringWithFormat:@"🎯 订单: %.1fkm / %d分 / 费:%.0f元", distKm, mins, estimatedTolls];
-                speechOrderPart = [NSString stringWithFormat:@"订单全程%.1f公里，预计耗时%d分钟，高速费预估%.0f块。", distKm, mins, estimatedTolls];
+                NSString *uiTimeStr = formatTimeStr(mins, NO);
+                NSString *speechTimeStr = formatTimeStr(mins, YES);
+                
+                orderInfo = [NSString stringWithFormat:@"🎯 订单: %.1fkm / %@ / 费:%.0f元", distKm, uiTimeStr, estimatedTolls];
+                speechOrderPart = [NSString stringWithFormat:@"订单全程%.1f公里，预计耗时%@，高速费预估%.0f块。", distKm, speechTimeStr, estimatedTolls];
             }
         }
         dispatch_group_leave(group);
@@ -155,7 +175,7 @@ static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord) 
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
         ensureOverlayUI();
         
-        // UI 剥离了出行次数，只显示接人和订单两行
+        // UI 显示接人和订单两行
         overlayLabel.text = [NSString stringWithFormat:@"%@\n%@", pickupInfo, orderInfo];
         
         // 动态调整高速费文字颜色
@@ -165,7 +185,7 @@ static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord) 
             overlayLabel.textColor = [UIColor greenColor];
         }
 
-        // 播报同样去除了出行次数
+        // 语音播报
         NSString *finalSpeech = [NSString stringWithFormat:@"老板，接人信息已更新。%@", speechOrderPart];
         speakText(finalSpeech); 
         
@@ -194,7 +214,7 @@ static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord) 
                 if (start && end) {
                     NSString *pickupCoord = [NSString stringWithFormat:@"%@,%@", start[@"lon"], start[@"lat"]];
                     NSString *dropoffCoord = [NSString stringWithFormat:@"%@,%@", end[@"lon"], end[@"lat"]];
-                    fetchCombinedMetrics(pickupCoord, dropoffCoord); // 取消传递 tripCount
+                    fetchCombinedMetrics(pickupCoord, dropoffCoord); 
                 }
             }
         } @catch (NSException *e) {}
