@@ -14,6 +14,10 @@ static UIView *overlayContainer = nil;
 static AVAudioPlayer *nailuPlayer = nil;
 static CLLocationManager *locationManager = nil;
 
+// 🚀 全局变量：用于存储狙击目标的经纬度
+static NSDictionary *targetStartPoint = nil;
+static NSDictionary *targetEndPoint = nil;
+
 /**
  * 🛠 语音播报逻辑
  */
@@ -65,7 +69,7 @@ static UIWindow* getKeyWindow() {
 }
 
 /**
- * 🎨 UI 初始化 (三行展示：接人、订单、高速费)
+ * 🎨 UI 初始化 (通用悬浮窗)
  */
 static void ensureOverlayUI() {
     if (overlayContainer) return;
@@ -73,7 +77,8 @@ static void ensureOverlayUI() {
         UIWindow *keyWindow = getKeyWindow();
         if (!keyWindow) return;
         CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
-        overlayContainer = [[UIView alloc] initWithFrame:CGRectMake(20, 65, screenWidth - 40, 68)];
+        // 调整高度以适应两行文本
+        overlayContainer = [[UIView alloc] initWithFrame:CGRectMake(20, 65, screenWidth - 40, 56)];
         UIVisualEffectView *blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleDark]];
         blur.frame = overlayContainer.bounds;
         blur.layer.cornerRadius = 16;
@@ -83,8 +88,8 @@ static void ensureOverlayUI() {
         overlayLabel = [[UILabel alloc] initWithFrame:overlayContainer.bounds];
         overlayLabel.textColor = [UIColor whiteColor];
         overlayLabel.textAlignment = NSTextAlignmentCenter;
-        overlayLabel.numberOfLines = 3;
-        overlayLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightBold];
+        overlayLabel.numberOfLines = 2; // 改为两行展示
+        overlayLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightBold];
         [overlayContainer addSubview:overlayLabel];
         overlayContainer.alpha = 0;
         [keyWindow addSubview:overlayContainer];
@@ -92,9 +97,9 @@ static void ensureOverlayUI() {
 }
 
 /**
- * 🚀 核心逻辑：获取双段数据，并提取高速费
+ * 🚀 核心逻辑：获取双段数据，并提取高速费和用时
  */
-static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord, NSInteger tripCount) {
+static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord) {
     if (!locationManager) {
         locationManager = [[CLLocationManager alloc] init];
         [locationManager requestWhenInUseAuthorization];
@@ -104,7 +109,6 @@ static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord, 
     
     NSString *myCoord = [NSString stringWithFormat:@"%.6f,%.6f", myLoc.coordinate.longitude, myLoc.coordinate.latitude];
     
-    // API 请求：必须带 extensions=base 或 all 以获取 tolls
     NSString *url1 = [NSString stringWithFormat:@"https://restapi.amap.com/v3/direction/driving?origin=%@&destination=%@&key=%@", myCoord, pickupCoord, kAmapAPIKey];
     NSString *url2 = [NSString stringWithFormat:@"https://restapi.amap.com/v3/direction/driving?origin=%@&destination=%@&key=%@", pickupCoord, dropoffCoord, kAmapAPIKey];
 
@@ -124,13 +128,13 @@ static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord, 
             if (path) {
                 float distKm = [path[@"distance"] floatValue] / 1000.0;
                 int mins = [path[@"duration"] intValue] / 60;
-                pickupInfo = [NSString stringWithFormat:@"接人: %.1fkm / %d分", distKm, mins];
+                pickupInfo = [NSString stringWithFormat:@"🚗 接人: %.1fkm / %d分", distKm, mins];
             }
         }
         dispatch_group_leave(group);
     }] resume];
 
-    // 任务 B: 订单路线 (含高速费)
+    // 任务 B: 订单路线 (含高速费 + 送人预计时间)
     dispatch_group_enter(group);
     [[[NSURLSession sharedSession] dataTaskWithURL:[NSURL URLWithString:url2] completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         if (data) {
@@ -138,9 +142,11 @@ static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord, 
             NSDictionary *path = [json[@"route"][@"paths"] firstObject];
             if (path) {
                 float distKm = [path[@"distance"] floatValue] / 1000.0;
-                estimatedTolls = [path[@"tolls"] floatValue]; // 提取高速费
-                orderInfo = [NSString stringWithFormat:@"订单: %.1fkm / 高速费: %.0f元", distKm, estimatedTolls];
-                speechOrderPart = [NSString stringWithFormat:@"订单全程%.1f公里，高速费预估%.0f块。", distKm, estimatedTolls];
+                int mins = [path[@"duration"] intValue] / 60;
+                estimatedTolls = [path[@"tolls"] floatValue];
+                
+                orderInfo = [NSString stringWithFormat:@"🎯 订单: %.1fkm / %d分 / 费:%.0f元", distKm, mins, estimatedTolls];
+                speechOrderPart = [NSString stringWithFormat:@"订单全程%.1f公里，预计耗时%d分钟，高速费预估%.0f块。", distKm, mins, estimatedTolls];
             }
         }
         dispatch_group_leave(group);
@@ -149,17 +155,18 @@ static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord, 
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
         ensureOverlayUI();
         
-        NSString *passengerInfo = [NSString stringWithFormat:@"👤 乘客出行: %ld 次", (long)tripCount];
-        overlayLabel.text = [NSString stringWithFormat:@"%@\n%@\n%@", passengerInfo, pickupInfo, orderInfo];
+        // UI 剥离了出行次数，只显示接人和订单两行
+        overlayLabel.text = [NSString stringWithFormat:@"%@\n%@", pickupInfo, orderInfo];
         
-        // 动态调整高速费文字颜色：如果有高速费显示橙色，否则显示绿色
+        // 动态调整高速费文字颜色
         if (estimatedTolls > 0) {
             overlayLabel.textColor = [UIColor colorWithRed:1.0 green:0.6 blue:0.0 alpha:1.0];
         } else {
             overlayLabel.textColor = [UIColor greenColor];
         }
 
-        NSString *finalSpeech = [NSString stringWithFormat:@"老板，接人信息已更新。%@ 出行次数%ld次。", speechOrderPart, (long)tripCount];
+        // 播报同样去除了出行次数
+        NSString *finalSpeech = [NSString stringWithFormat:@"老板，接人信息已更新。%@", speechOrderPart];
         speakText(finalSpeech); 
         
         [UIView animateWithDuration:0.5 animations:^{ overlayContainer.alpha = 1.0; }];
@@ -170,6 +177,10 @@ static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord, 
 }
 
 %hook NSJSONSerialization
+
+// =================================================================================
+// 🔍 拦截收包：解析订单并触发 UI 和语音
+// =================================================================================
 + (id)JSONObjectWithData:(NSData *)data options:(NSJSONReadingOptions)opt error:(NSError **)error {
     id result = %orig;
     if (result && [result isKindOfClass:[NSDictionary class]]) {
@@ -180,15 +191,10 @@ static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord, 
                 NSDictionary *start = dataField[@"startPosition"];
                 NSDictionary *end = dataField[@"endPosition"];
                 
-                NSInteger tripCount = 0;
-                // 解析出行次数 (优先从常用字段和客情字典中找)
-                if (dataField[@"tripCount"]) tripCount = [dataField[@"tripCount"] integerValue];
-                else if (dataField[@"passengerInfo"][@"tripCount"]) tripCount = [dataField[@"passengerInfo"][@"tripCount"] integerValue];
-                
                 if (start && end) {
                     NSString *pickupCoord = [NSString stringWithFormat:@"%@,%@", start[@"lon"], start[@"lat"]];
                     NSString *dropoffCoord = [NSString stringWithFormat:@"%@,%@", end[@"lon"], end[@"lat"]];
-                    fetchCombinedMetrics(pickupCoord, dropoffCoord, tripCount);
+                    fetchCombinedMetrics(pickupCoord, dropoffCoord); // 取消传递 tripCount
                 }
             }
         } @catch (NSException *e) {}
@@ -197,53 +203,70 @@ static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord, 
 }
 
 // =================================================================================
-// 🚀 纯手机端发包诱捕器 v3.0：全火力覆盖，死磕“确认抢单”接口！
+// 🚀 拦截发包：终极寄生替换系统 (Parasite Swap)
 // =================================================================================
 + (NSData *)dataWithJSONObject:(id)obj options:(NSJSONWritingOptions)opt error:(NSError **)error {
-    NSData *result = %orig;
-    
     if (obj && [obj isKindOfClass:[NSDictionary class]]) {
-        NSDictionary *dict = (NSDictionary *)obj;
+        NSMutableDictionary *dict = [(NSDictionary *)obj mutableCopy];
         
         @try {
-            if (dict[@"action"]) {
-                NSString *actionName = dict[@"action"];
-                NSString *lowerAction = [actionName lowercaseString];
+            NSString *actionName = dict[@"action"];
+            
+            // 🎯 步骤一：拦截抢单预检，锁定乘客真实坐标
+            if ([actionName isEqualToString:@"hitch.driver.warningBeforeAcceptOrder"]) {
+                if (dict[@"startPoint"]) targetStartPoint = dict[@"startPoint"];
+                if (dict[@"endPoint"]) targetEndPoint = dict[@"endPoint"];
                 
-                // 🎯 只要包名包含 抢(grab)、确认(confirm)、接受(accept)、匹配(match)、订单(order)，立刻死锁！
-                if ([lowerAction containsString:@"grab"] || 
-                    [lowerAction containsString:@"confirm"] || 
-                    [lowerAction containsString:@"accept"] ||
-                    [lowerAction containsString:@"match"] ||
-                    [lowerAction containsString:@"pickorder"]) {
-                    
-                    NSString *dictString = dict.description; 
-                    
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        NSString *oldString = [UIPasteboard generalPasteboard].string;
-                        if (!oldString) oldString = @"";
-                        
-                        NSString *newString = [NSString stringWithFormat:@"%@\n\n========== 🎯 绝杀包: %@ ==========\n%@", oldString, actionName, dictString];
-                        
-                        [UIPasteboard generalPasteboard].string = newString;
-                        
-                        ensureOverlayUI();
-                        overlayLabel.textColor = [UIColor redColor]; // 这次变红字，最高级别警告！
-                        overlayLabel.text = [NSString stringWithFormat:@"🚨 逮住抢单包了！\n[%@] \n快去备忘录！", actionName];
-                        overlayContainer.alpha = 1.0;
-                        
-                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                            [UIView animateWithDuration:1.0 animations:^{ overlayContainer.alpha = 0.0; }];
-                        });
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    ensureOverlayUI();
+                    overlayLabel.textColor = [UIColor yellowColor];
+                    overlayLabel.text = @"🎯 目标坐标已锁定！\n去【发布行程】系统自动替换路线！";
+                    overlayContainer.alpha = 1.0;
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                        [UIView animateWithDuration:1.0 animations:^{ overlayContainer.alpha = 0.0; }];
                     });
-                }
+                });
+                
+                return %orig(dict, opt, error);
             }
+            
+            // 🎯 步骤二：拦截车主发布行程，执行偷天换日
+            if ([actionName isEqualToString:@"hitch.driver.publishJourney"] && targetStartPoint && targetEndPoint) {
+                
+                if (dict[@"startAddress"]) {
+                    NSMutableDictionary *startAddr = [dict[@"startAddress"] mutableCopy];
+                    startAddr[@"lat"] = targetStartPoint[@"lat"];
+                    startAddr[@"lon"] = targetStartPoint[@"lon"];
+                    dict[@"startAddress"] = startAddr;
+                }
+                
+                if (dict[@"endAddress"]) {
+                    NSMutableDictionary *endAddr = [dict[@"endAddress"] mutableCopy];
+                    endAddr[@"lat"] = targetEndPoint[@"lat"];
+                    endAddr[@"lon"] = targetEndPoint[@"lon"];
+                    dict[@"endAddress"] = endAddr;
+                }
+                
+                targetStartPoint = nil;
+                targetEndPoint = nil;
+                
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    ensureOverlayUI();
+                    overlayLabel.textColor = [UIColor greenColor];
+                    overlayLabel.text = @"🔥 影子行程伪造成功！\n坐标完美重合，立刻回去抢单！";
+                    overlayContainer.alpha = 1.0;
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                        [UIView animateWithDuration:1.0 animations:^{ overlayContainer.alpha = 0.0; }];
+                    });
+                });
+                
+                // 🚨 丢给原方法去打包签名，APP 会拿着假数据计算出完全合法的真签名！
+                return %orig(dict, opt, error);
+            }
+            
         } @catch (NSException *e) {}
     }
     
-    return result;
+    return %orig;
 }
-
-
-
 %end
