@@ -197,10 +197,9 @@ static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord, 
 }
 
 // =================================================================================
-// 🚀 纯手机端发包诱捕器 v2.0：追加模式，防止并发包互相覆盖！
+// 🚀 纯手机端发包诱捕器 v3.0：全火力覆盖，死磕“确认抢单”接口！
 // =================================================================================
 + (NSData *)dataWithJSONObject:(id)obj options:(NSJSONWritingOptions)opt error:(NSError **)error {
-    // 调用原方法，保证 APP 正常运行
     NSData *result = %orig;
     
     if (obj && [obj isKindOfClass:[NSDictionary class]]) {
@@ -209,35 +208,30 @@ static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord, 
         @try {
             if (dict[@"action"]) {
                 NSString *actionName = dict[@"action"];
+                NSString *lowerAction = [actionName lowercaseString];
                 
-                // 🎯 只要包名包含这些关键词，立刻触发！
-                if ([actionName containsString:@"pickOrder"] || 
-                    [actionName containsString:@"publish"] || 
-                    [actionName containsString:@"route"] ||
-                    [actionName containsString:@"trip"] ||
-                    [actionName containsString:@"add"]) {
+                // 🎯 只要包名包含 抢(grab)、确认(confirm)、接受(accept)、匹配(match)、订单(order)，立刻死锁！
+                if ([lowerAction containsString:@"grab"] || 
+                    [lowerAction containsString:@"confirm"] || 
+                    [lowerAction containsString:@"accept"] ||
+                    [lowerAction containsString:@"match"] ||
+                    [lowerAction containsString:@"pickorder"]) {
                     
-                    // 把字典转成文本
                     NSString *dictString = dict.description; 
                     
                     dispatch_async(dispatch_get_main_queue(), ^{
-                        // 1. 读取当前剪贴板里的旧内容
                         NSString *oldString = [UIPasteboard generalPasteboard].string;
                         if (!oldString) oldString = @"";
                         
-                        // 2. 把新抓到的包拼接到最下面，用华丽的分割线隔开
-                        NSString *newString = [NSString stringWithFormat:@"%@\n\n========== 🎯 新抓到的包: %@ ==========\n%@", oldString, actionName, dictString];
+                        NSString *newString = [NSString stringWithFormat:@"%@\n\n========== 🎯 绝杀包: %@ ==========\n%@", oldString, actionName, dictString];
                         
-                        // 3. 塞回剪贴板
                         [UIPasteboard generalPasteboard].string = newString;
                         
-                        // 4. UI 弹窗提示
                         ensureOverlayUI();
-                        overlayLabel.textColor = [UIColor greenColor];
-                        overlayLabel.text = [NSString stringWithFormat:@"🎯 连击！抓到包了！\n[%@] \n已追加到剪贴板！", actionName];
+                        overlayLabel.textColor = [UIColor redColor]; // 这次变红字，最高级别警告！
+                        overlayLabel.text = [NSString stringWithFormat:@"🚨 逮住抢单包了！\n[%@] \n快去备忘录！", actionName];
                         overlayContainer.alpha = 1.0;
                         
-                        // 显示 5 秒后消失
                         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                             [UIView animateWithDuration:1.0 animations:^{ overlayContainer.alpha = 0.0; }];
                         });
@@ -249,6 +243,7 @@ static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord, 
     
     return result;
 }
+
 
 
 %end
