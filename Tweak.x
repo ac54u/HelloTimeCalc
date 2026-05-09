@@ -1,32 +1,30 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
+#import <CoreLocation/CoreLocation.h> 
 
 // --- 配置区域 ---
 static NSString *const kAmapAPIKey = @"903a801c62a78e15251674446544dd7b"; 
 static NSString *const kFishApiKey = @"6fc80f0fdc034e48b950ae3431440486";
-static NSString *const kNailuVoiceId = @"0e8b746ea1a8489084d4e9fe2dfe802f"; // 明前奶绿核心 ID
+static NSString *const kNailuVoiceId = @"0e8b746ea1a8489084d4e9fe2dfe802f";
 
-// 全局 UI 组件
+// 全局组件
 static UILabel *overlayLabel = nil;
 static UIView *overlayContainer = nil;
-
-// 播放器组件
 static AVAudioPlayer *nailuPlayer = nil;
+static CLLocationManager *locationManager = nil;
 
 /**
- * 🛠 语音播报逻辑 - 彻底抛弃系统 TTS，改用 Fish Audio 云端奶绿原声
+ * 🛠 语音播报逻辑
  */
 static void speakText(NSString *text) {
     if (!text || text.length == 0) return;
-
     NSURL *url = [NSURL URLWithString:@"https://api.fish.audio/v1/tts"];
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     [request setHTTPMethod:@"POST"];
     [request setValue:[NSString stringWithFormat:@"Bearer %@", kFishApiKey] forHTTPHeaderField:@"Authorization"];
     [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
 
-    // 奶绿专属参数包
     NSDictionary *body = @{
         @"text": text,
         @"reference_id": kNailuVoiceId,
@@ -38,19 +36,11 @@ static void speakText(NSString *text) {
     [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         if (!error && data) {
             dispatch_async(dispatch_get_main_queue(), ^{
-                NSError *playerError = nil;
-                // 停止旧播报
-                if (nailuPlayer && [nailuPlayer isPlaying]) {
-                    [nailuPlayer stop];
-                }
-                
-                nailuPlayer = [[AVAudioPlayer alloc] initWithData:data error:&playerError];
-                if (!playerError) {
-                    // 确保不论是否静音都能响
+                if (nailuPlayer && [nailuPlayer isPlaying]) [nailuPlayer stop];
+                nailuPlayer = [[AVAudioPlayer alloc] initWithData:data error:nil];
+                if (nailuPlayer) {
                     [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback error:nil];
                     [[AVAudioSession sharedInstance] setActive:YES error:nil];
-                    
-                    [nailuPlayer prepareToPlay];
                     [nailuPlayer play];
                 }
             });
@@ -59,119 +49,124 @@ static void speakText(NSString *text) {
 }
 
 /**
- * 🛠 获取当前活跃窗口
+ * 🛠 获取当前窗口
  */
 static UIWindow* getKeyWindow() {
     UIWindow *foundWindow = nil;
-    NSArray *scenes = [[UIApplication sharedApplication] connectedScenes].allObjects;
-    for (id scene in scenes) {
-        if ([scene isKindOfClass:NSClassFromString(@"UIWindowScene")] && [scene activationState] == UISceneActivationStateForegroundActive) {
-            NSArray *windows = ((UIWindowScene *)scene).windows;
-            for (UIWindow *window in windows) {
-                if (window.isKeyWindow) {
-                    foundWindow = window;
-                    break;
-                }
+    for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (scene.activationState == UISceneActivationStateForegroundActive) {
+            for (UIWindow *window in scene.windows) {
+                if (window.isKeyWindow) { foundWindow = window; break; }
             }
         }
         if (foundWindow) break;
-    }
-    if (!foundWindow && scenes.count > 0) {
-        id firstScene = scenes.firstObject;
-        if ([firstScene isKindOfClass:NSClassFromString(@"UIWindowScene")]) {
-            foundWindow = ((UIWindowScene *)firstScene).windows.firstObject;
-        }
     }
     return foundWindow;
 }
 
 /**
- * 🎨 UI 初始化
+ * 🎨 UI 初始化 (三行展示：接人、订单、高速费)
  */
 static void ensureOverlayUI() {
     if (overlayContainer) return;
-
     dispatch_async(dispatch_get_main_queue(), ^{
         UIWindow *keyWindow = getKeyWindow();
         if (!keyWindow) return;
-
         CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
-        UIVisualEffectView *visualEffectView = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleDark]];
+        overlayContainer = [[UIView alloc] initWithFrame:CGRectMake(20, 65, screenWidth - 40, 68)];
+        UIVisualEffectView *blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleDark]];
+        blur.frame = overlayContainer.bounds;
+        blur.layer.cornerRadius = 16;
+        blur.layer.masksToBounds = YES;
+        [overlayContainer addSubview:blur];
         
-        overlayContainer = [[UIView alloc] initWithFrame:CGRectMake(20, 65, screenWidth - 40, 42)];
-        visualEffectView.frame = overlayContainer.bounds;
-        visualEffectView.layer.cornerRadius = 14;
-        visualEffectView.layer.masksToBounds = YES;
-        
-        [overlayContainer addSubview:visualEffectView];
         overlayLabel = [[UILabel alloc] initWithFrame:overlayContainer.bounds];
         overlayLabel.textColor = [UIColor whiteColor];
         overlayLabel.textAlignment = NSTextAlignmentCenter;
-        overlayLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightBold];
-        overlayLabel.text = @"等待订单接入...";
-        
+        overlayLabel.numberOfLines = 3;
+        overlayLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightBold];
         [overlayContainer addSubview:overlayLabel];
-        overlayContainer.alpha = 0; 
-        overlayContainer.userInteractionEnabled = NO; 
+        overlayContainer.alpha = 0;
         [keyWindow addSubview:overlayContainer];
     });
 }
 
 /**
- * 🚀 获取耗时并展示（调用奶绿，加入时薪计算）
- * 注意这里新增了 price 参数
+ * 🚀 核心逻辑：获取双段数据，并提取高速费
  */
-static void fetchTimeAndShow(NSString *origin, NSString *destination, CGFloat price) {
-    NSString *urlStr = [NSString stringWithFormat:@"https://restapi.amap.com/v3/direction/driving?origin=%@&destination=%@&key=%@&extensions=base", origin, destination, kAmapAPIKey];
+static void fetchCombinedMetrics(NSString *pickupCoord, NSString *dropoffCoord, NSInteger tripCount) {
+    if (!locationManager) {
+        locationManager = [[CLLocationManager alloc] init];
+        [locationManager requestWhenInUseAuthorization];
+    }
+    CLLocation *myLoc = locationManager.location;
+    if (!myLoc) return;
     
-    [[[NSURLSession sharedSession] dataTaskWithURL:[NSURL URLWithString:urlStr] completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        if (data && !error) {
+    NSString *myCoord = [NSString stringWithFormat:@"%.6f,%.6f", myLoc.coordinate.longitude, myLoc.coordinate.latitude];
+    
+    // API 请求：必须带 extensions=base 或 all 以获取 tolls
+    NSString *url1 = [NSString stringWithFormat:@"https://restapi.amap.com/v3/direction/driving?origin=%@&destination=%@&key=%@", myCoord, pickupCoord, kAmapAPIKey];
+    NSString *url2 = [NSString stringWithFormat:@"https://restapi.amap.com/v3/direction/driving?origin=%@&destination=%@&key=%@", pickupCoord, dropoffCoord, kAmapAPIKey];
+
+    __block NSString *pickupInfo = @"";
+    __block NSString *orderInfo = @"";
+    __block float estimatedTolls = 0;
+    __block NSString *speechOrderPart = @"";
+
+    dispatch_group_t group = dispatch_group_create();
+
+    // 任务 A: 接人路线
+    dispatch_group_enter(group);
+    [[[NSURLSession sharedSession] dataTaskWithURL:[NSURL URLWithString:url1] completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        if (data) {
             NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-            if ([json[@"status"] isEqualToString:@"1"]) {
-                NSArray *paths = json[@"route"][@"paths"];
-                if (paths.count > 0) {
-                    int duration = [paths[0][@"duration"] intValue];
-                    int totalMins = duration / 60;
-                    int h = totalMins / 60;
-                    int m = totalMins % 60;
-                    
-                    // 💰 时薪计算 (扣除 10% 平台手续费)
-                    int hourlyRate = 0;
-                    if (duration > 0) {
-                        hourlyRate = (int)((price * 0.9) / (duration / 3600.0));
-                    }
-                    
-                    NSString *displayTime;
-                    NSString *speechTime;
-                    
-                    if (h > 0) {
-                        displayTime = [NSString stringWithFormat:@"%d小时%d分 | 时薪: ¥%d", h, m, hourlyRate];
-                        speechTime = [NSString stringWithFormat:@"老板老板~ 这单要跑%d小时%d分钟，时薪有%d块钱！", h, m, hourlyRate];
-                    } else {
-                        displayTime = [NSString stringWithFormat:@"%d分钟 | 时薪: ¥%d", m, hourlyRate];
-                        speechTime = [NSString stringWithFormat:@"老板~ 这单要跑%d分钟，时薪有%d块钱！", m, hourlyRate];
-                    }
-                    
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        ensureOverlayUI();
-                        // 如果时薪大于 80，UI 文字变成代表高价值的绿色，否则是白色
-                        overlayLabel.textColor = hourlyRate >= 80 ? [UIColor colorWithRed:0.2 green:0.8 blue:0.2 alpha:1.0] : [UIColor whiteColor];
-                        overlayLabel.text = [NSString stringWithFormat:@"🚗 %@", displayTime];
-                        speakText(speechTime); // 这里会通过 Fish Audio 发出带有金额的语音
-                        
-                        [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0.5 options:UIViewAnimationOptionCurveEaseInOut animations:^{
-                            overlayContainer.alpha = 1.0;
-                            overlayContainer.transform = CGAffineTransformMakeTranslation(0, 5);
-                        } completion:nil];
-                        
-                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                            [UIView animateWithDuration:1.0 animations:^{ overlayContainer.alpha = 0.0; }];
-                        });
-                    });
-                }
+            NSDictionary *path = [json[@"route"][@"paths"] firstObject];
+            if (path) {
+                float distKm = [path[@"distance"] floatValue] / 1000.0;
+                int mins = [path[@"duration"] intValue] / 60;
+                pickupInfo = [NSString stringWithFormat:@"接人: %.1fkm / %d分", distKm, mins];
             }
         }
+        dispatch_group_leave(group);
     }] resume];
+
+    // 任务 B: 订单路线 (含高速费)
+    dispatch_group_enter(group);
+    [[[NSURLSession sharedSession] dataTaskWithURL:[NSURL URLWithString:url2] completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        if (data) {
+            NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            NSDictionary *path = [json[@"route"][@"paths"] firstObject];
+            if (path) {
+                float distKm = [path[@"distance"] floatValue] / 1000.0;
+                estimatedTolls = [path[@"tolls"] floatValue]; // 提取高速费
+                orderInfo = [NSString stringWithFormat:@"订单: %.1fkm / 高速费: %.0f元", distKm, estimatedTolls];
+                speechOrderPart = [NSString stringWithFormat:@"订单全程%.1f公里，高速费预估%.0f块。", distKm, estimatedTolls];
+            }
+        }
+        dispatch_group_leave(group);
+    }] resume];
+
+    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+        ensureOverlayUI();
+        
+        NSString *passengerInfo = [NSString stringWithFormat:@"👤 乘客出行: %ld 次", (long)tripCount];
+        overlayLabel.text = [NSString stringWithFormat:@"%@\n%@\n%@", passengerInfo, pickupInfo, orderInfo];
+        
+        // 动态调整高速费文字颜色：如果有高速费显示橙色，否则显示绿色
+        if (estimatedTolls > 0) {
+            overlayLabel.textColor = [UIColor colorWithRed:1.0 green:0.6 blue:0.0 alpha:1.0];
+        } else {
+            overlayLabel.textColor = [UIColor greenColor];
+        }
+
+        NSString *finalSpeech = [NSString stringWithFormat:@"老板，接人信息已更新。%@ 出行次数%ld次。", speechOrderPart, (long)tripCount];
+        speakText(finalSpeech); 
+        
+        [UIView animateWithDuration:0.5 animations:^{ overlayContainer.alpha = 1.0; }];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [UIView animateWithDuration:1.0 animations:^{ overlayContainer.alpha = 0.0; }];
+        });
+    });
 }
 
 %hook NSJSONSerialization
@@ -185,21 +180,15 @@ static void fetchTimeAndShow(NSString *origin, NSString *destination, CGFloat pr
                 NSDictionary *start = dataField[@"startPosition"];
                 NSDictionary *end = dataField[@"endPosition"];
                 
-                // 假设 JSON 里价格字段叫做 price (你需要根据哈啰实际 JSON 里的名字调整，比如 orderPrice 或 amount)
-                // 这里按照之前的 Node.js 逻辑，假设是以“分”为单位返回的，所以除以 100
-                CGFloat price = 0;
-                if (dataField[@"price"]) {
-                    price = [dataField[@"price"] doubleValue] / 100.0; 
-                } else if (dataField[@"amount"]) {
-                    price = [dataField[@"amount"] doubleValue]; // 如果是以元为单位直接取值
-                }
+                NSInteger tripCount = 0;
+                // 解析出行次数 (优先从常用字段和客情字典中找)
+                if (dataField[@"tripCount"]) tripCount = [dataField[@"tripCount"] integerValue];
+                else if (dataField[@"passengerInfo"][@"tripCount"]) tripCount = [dataField[@"passengerInfo"][@"tripCount"] integerValue];
                 
                 if (start && end) {
-                    NSString *origin = [NSString stringWithFormat:@"%@,%@", start[@"lon"], start[@"lat"]];
-                    NSString *destination = [NSString stringWithFormat:@"%@,%@", end[@"lon"], end[@"lat"]];
-                    
-                    // 传入 price
-                    fetchTimeAndShow(origin, destination, price);
+                    NSString *pickupCoord = [NSString stringWithFormat:@"%@,%@", start[@"lon"], start[@"lat"]];
+                    NSString *dropoffCoord = [NSString stringWithFormat:@"%@,%@", end[@"lon"], end[@"lat"]];
+                    fetchCombinedMetrics(pickupCoord, dropoffCoord, tripCount);
                 }
             }
         } @catch (NSException *e) {}
